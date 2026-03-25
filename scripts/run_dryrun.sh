@@ -319,7 +319,7 @@ import torch, torch.distributed
 print(f'NCCL available: {torch.distributed.is_nccl_available()}')
 print(f'CUDA devices: {torch.cuda.device_count()}')
 print(f'GPU: {torch.cuda.get_device_name(0)}')
-print(f'VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB')
+print(f'VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB')
 " || fail "CUDA/NCCL check failed"
 
 log "Step 8 PASSED"

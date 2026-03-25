@@ -31,12 +31,7 @@ SHOPPING_ADMIN_URL="http://${LOCAL_IP}:7780"
 REDDIT_URL="http://${LOCAL_IP}:9999"
 GITLAB_URL="http://${LOCAL_IP}:8023"
 
-# Route traffic to local PC through Tailscale SOCKS5 proxy
-# (userspace-networking mode requires this)
-export ALL_PROXY="$TAILSCALE_SOCKS5"
-export HTTP_PROXY="$TAILSCALE_SOCKS5"
-export HTTPS_PROXY="$TAILSCALE_SOCKS5"
-export NO_PROXY="localhost,127.0.0.1"
+# NOTE: Tailscale SOCKS5 proxy is set AFTER Step 2 (Playwright install needs direct internet)
 
 # =============================================================
 # Step 1: Verify Remote WebArena Containers
@@ -123,11 +118,21 @@ bash prepare.sh 2>/dev/null || log "  Warning: prepare.sh may need manual setup"
 log "Step 2 complete."
 
 # =============================================================
+# Enable Tailscale SOCKS5 proxy (after Playwright install)
+# =============================================================
+log "Installing vLLM (before enabling proxy)..."
+pip install vllm --quiet 2>/dev/null
+
+log "Enabling Tailscale SOCKS5 proxy for WebArena access..."
+export ALL_PROXY="$TAILSCALE_SOCKS5"
+export HTTP_PROXY="$TAILSCALE_SOCKS5"
+export HTTPS_PROXY="$TAILSCALE_SOCKS5"
+export NO_PROXY="localhost,127.0.0.1"
+
+# =============================================================
 # Step 3: Install vLLM and serve model
 # =============================================================
 log "Step 3: Setting up vLLM model server..."
-
-pip install vllm --quiet 2>/dev/null
 
 # Start vLLM server in background
 log "  Starting vLLM server for THUDM/webrl-llama-3.1-8b on port 8000..."

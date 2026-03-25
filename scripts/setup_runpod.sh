@@ -25,10 +25,18 @@ WEBRL_DIR="/WebRL"
 # Docker containers run on local PC, accessed over Tailscale mesh.
 # =============================================================
 LOCAL_IP="100.92.2.51"
+TAILSCALE_SOCKS5="socks5://localhost:1055"
 SHOPPING_URL="http://${LOCAL_IP}:7770"
 SHOPPING_ADMIN_URL="http://${LOCAL_IP}:7780"
 REDDIT_URL="http://${LOCAL_IP}:9999"
 GITLAB_URL="http://${LOCAL_IP}:8023"
+
+# Route traffic to local PC through Tailscale SOCKS5 proxy
+# (userspace-networking mode requires this)
+export ALL_PROXY="$TAILSCALE_SOCKS5"
+export HTTP_PROXY="$TAILSCALE_SOCKS5"
+export HTTPS_PROXY="$TAILSCALE_SOCKS5"
+export NO_PROXY="localhost,127.0.0.1"
 
 # =============================================================
 # Step 1: Verify Remote WebArena Containers
@@ -38,11 +46,11 @@ log "Step 1: Verifying remote WebArena containers (local PC via Tailscale)..."
 for name_url in "shopping:${SHOPPING_URL}" "shopping_admin:${SHOPPING_ADMIN_URL}" "reddit:${REDDIT_URL}" "gitlab:${GITLAB_URL}"; do
     name="${name_url%%:*}"
     url="${name_url#*:}"
-    if curl -s -o /dev/null -w "%{http_code}" "$url" | grep -qE "200|302|301"; then
+    if curl -s --socks5 localhost:1055 -o /dev/null -w "%{http_code}" --max-time 15 "$url" | grep -qE "200|302|301"; then
         log "    ✓ ${name}: OK ($url)"
     else
         log "    ✗ ${name}: NOT REACHABLE ($url)"
-        log "      Check that Docker container and tunnel are running on local machine."
+        log "      Check: Docker running on local PC? Tailscale connected? Firewall open?"
     fi
 done
 
@@ -97,6 +105,11 @@ export GITLAB="$GITLAB_URL"
 export MAP=""
 export WIKIPEDIA=""
 export HOMEPAGE=""
+# Tailscale SOCKS5 proxy (userspace-networking mode)
+export ALL_PROXY="socks5://localhost:1055"
+export HTTP_PROXY="socks5://localhost:1055"
+export HTTPS_PROXY="socks5://localhost:1055"
+export NO_PROXY="localhost,127.0.0.1"
 EOF
 
 # Generate task configs

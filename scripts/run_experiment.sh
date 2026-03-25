@@ -209,11 +209,11 @@ phase1_verify() {
     }
     log "  ✓ vLLM server"
 
-    # Check containers (local PC via Tailscale)
+    # Check containers (local PC via Tailscale SOCKS5)
     for name_url in "shopping:$SHOPPING" "reddit:$REDDIT" "gitlab:$GITLAB"; do
         name="${name_url%%:*}"
         url="${name_url#*:}"
-        curl -s -o /dev/null "$url" || {
+        curl -s --socks5 localhost:1055 --max-time 15 -o /dev/null "$url" || {
             log "ERROR: $name not reachable at $url. Check Tailscale + Docker on local PC."
             exit 1
         }

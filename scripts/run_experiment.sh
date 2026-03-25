@@ -4,8 +4,9 @@
 #
 # Prerequisites:
 #   - Run setup_runpod.sh first
-#   - source /tmp/webarena_env.sh
+#   - Tailscale SOCKS5 proxy running on localhost:1055
 #   - vLLM server running on port 8000
+#   - Docker containers running on local PC (100.92.2.51)
 #
 # Usage: bash scripts/run_experiment.sh
 # =============================================================
@@ -25,7 +26,7 @@ VLLM_MODEL="THUDM/webrl-llama-3.1-8b"
 
 mkdir -p "$RESULTS_DIR" "$CHECKPOINTS_DIR" "$TRACES_DIR"
 
-# Load WebArena env vars
+# Load WebArena env vars + proxy settings
 source /tmp/webarena_env.sh
 
 log() {
@@ -44,7 +45,9 @@ time_phase() {
     echo "$phase_name=$duration" >> "$RESULTS_DIR/timings.txt"
 }
 
+# =============================================================
 # Helper: run VAB-WebArena-Lite rollout
+# =============================================================
 run_rollout() {
     local result_dir="$1"
     local start_idx="$2"
@@ -72,7 +75,9 @@ run_rollout() {
     cd "$WEBRL_DIR"
 }
 
+# =============================================================
 # Helper: run rollout with a fine-tuned model served on vLLM
+# =============================================================
 run_rollout_finetuned() {
     local model_path="$1"
     local result_dir="$2"
@@ -90,13 +95,20 @@ run_rollout_finetuned() {
         --max-model-len 16384 \
         --dtype bfloat16 \
         --trust-remote-code \
+        --gpu-memory-utilization 0.5 \
         > /tmp/vllm_server.log 2>&1 &
     echo $! > /tmp/vllm_pid.txt
 
     # Wait for vLLM ready
+    log "  Waiting for vLLM to load $model_path..."
     for i in $(seq 1 60); do
         if curl -s http://localhost:8000/health 2>/dev/null | grep -q "ok\|200"; then
+            log "  ✓ vLLM ready"
             break
+        fi
+        if [ $i -eq 60 ]; then
+            log "  ✗ vLLM not ready after 5 min"
+            tail -10 /tmp/vllm_server.log
         fi
         sleep 5
     done
@@ -122,12 +134,11 @@ run_rollout_finetuned() {
     cd "$WEBRL_DIR"
 }
 
+# =============================================================
 # Helper: refresh WebArena containers between attempts
-# NOTE: Containers run on the LOCAL machine, not on this GPU server.
-# To refresh, either:
-#   1. SSH back to local machine and run docker exec, or
-#   2. Skip refresh (acceptable for small-scale experiments)
-# Set LOCAL_SSH to enable remote refresh, e.g.: LOCAL_SSH="user@your-ip"
+# Containers run on local PC — can't docker exec from here.
+# Set LOCAL_SSH=user@host to enable remote refresh.
+# =============================================================
 LOCAL_SSH="${LOCAL_SSH:-}"
 
 refresh_containers() {
@@ -138,12 +149,13 @@ refresh_containers() {
         done
         sleep 10
     else
-        log "  Skipping container refresh (containers are remote, LOCAL_SSH not set)"
-        log "  Set LOCAL_SSH=user@host to enable remote refresh"
+        log "  Skipping container refresh (LOCAL_SSH not set)"
     fi
 }
 
+# =============================================================
 # Helper: collect results into JSON for evaluate.py
+# =============================================================
 collect_results() {
     local traces_dir="$1"
     local output_json="$2"
@@ -152,44 +164,27 @@ collect_results() {
     python -c "
 import json, os, glob
 from datetime import datetime
+from collections import defaultdict
 
 traces_dir = '${traces_dir}'
 actions_dir = os.path.join(traces_dir, 'actions') if os.path.exists(os.path.join(traces_dir, 'actions')) else traces_dir
 
 results = []
-# Find all action score files
 for f in sorted(glob.glob(os.path.join(actions_dir, '*.json'))):
     with open(f) as fp:
         data = json.load(fp)
     task_id = os.path.basename(f).replace('.json', '')
     score = data.get('score', 0)
-    results.append({
-        'task_id': task_id,
-        'site': 'unknown',
-        'score': score,
-    })
+    results.append({'task_id': task_id, 'site': 'unknown', 'score': score})
 
-# Group by task_id prefix for pass@k
-from collections import defaultdict
 task_attempts = defaultdict(list)
 for r in results:
-    # Extract base task id (remove attempt suffix if any)
     base_id = r['task_id'].rsplit('_attempt', 1)[0]
     task_attempts[base_id].append(r['score'] >= 0.5)
 
-task_results = []
-for task_id, attempts in task_attempts.items():
-    task_results.append({
-        'task_id': task_id,
-        'site': 'unknown',
-        'attempts': attempts,
-    })
+task_results = [{'task_id': tid, 'site': 'unknown', 'attempts': att} for tid, att in task_attempts.items()]
 
-output = {
-    'model': '${model_name}',
-    'timestamp': datetime.now().isoformat(),
-    'task_results': task_results,
-}
+output = {'model': '${model_name}', 'timestamp': datetime.now().isoformat(), 'task_results': task_results}
 with open('${output_json}', 'w') as f:
     json.dump(output, f, indent=2)
 print(f'Collected {len(task_results)} tasks, {len(results)} total attempts')
@@ -202,19 +197,19 @@ print(f'Collected {len(task_results)} tasks, {len(results)} total attempts')
 phase1_verify() {
     log "Verifying setup..."
 
-    # Check vLLM
+    # Check vLLM (localhost — no proxy)
     curl -s http://localhost:8000/health > /dev/null || {
-        log "ERROR: vLLM not running. Run setup_runpod.sh first."
+        log "ERROR: vLLM not running. Start it first."
         exit 1
     }
     log "  ✓ vLLM server"
 
-    # Check containers (local PC via Tailscale SOCKS5)
+    # Check containers (via Tailscale SOCKS5)
     for name_url in "shopping:$SHOPPING" "reddit:$REDDIT" "gitlab:$GITLAB"; do
         name="${name_url%%:*}"
         url="${name_url#*:}"
         curl -s --socks5 localhost:1055 --max-time 15 -o /dev/null "$url" || {
-            log "ERROR: $name not reachable at $url. Check Tailscale + Docker on local PC."
+            log "ERROR: $name not reachable at $url"
             exit 1
         }
     done
@@ -222,7 +217,23 @@ phase1_verify() {
 
     # Check env vars
     [ -n "$SHOPPING" ] || { log "ERROR: source /tmp/webarena_env.sh first"; exit 1; }
+    [ -n "$OPENAI_API_KEY" ] || { log "ERROR: OPENAI_API_KEY not set"; exit 1; }
     log "  ✓ Environment variables"
+
+    # Check task configs exist
+    NCONFIGS=$(ls "$VAB_DIR/config_files/wa/test_webarena_lite/"*.json 2>/dev/null | wc -l)
+    if [ "$NCONFIGS" -lt 1 ]; then
+        log "ERROR: No task configs in $VAB_DIR/config_files/wa/test_webarena_lite/"
+        log "  Run: cd $VAB_DIR && python scripts/generate_test_data.py"
+        exit 1
+    fi
+    log "  ✓ Task configs ($NCONFIGS files)"
+
+    # Check Playwright
+    python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop(); print('✓ Playwright OK')" || {
+        log "ERROR: Playwright not working"
+        exit 1
+    }
 
     log "Phase 1 complete."
 }
@@ -245,8 +256,10 @@ for f in actions:
         scores.append(json.load(fp).get('score', 0))
 successes = sum(1 for s in scores if s >= 0.5)
 print(f'Sanity check: {successes}/{len(scores)} tasks succeeded')
-if successes == 0:
+if successes == 0 and len(scores) > 0:
     print('WARNING: No successes. Model may be too weak or setup broken.')
+elif len(scores) == 0:
+    print('WARNING: No score files found. Rollout may have failed.')
 "
 
     log "Phase 2 complete."
@@ -291,12 +304,14 @@ phase4_process() {
         src="$TRACES_DIR/train_attempt_${attempt}"
         if [ -d "$src/traces" ]; then
             for f in "$src/traces"/*.jsonl; do
+                [ -e "$f" ] || continue
                 base=$(basename "$f" .jsonl)
                 cp "$f" "$TRACES_DIR/train_merged/traces/${base}_attempt${attempt}.jsonl"
             done
         fi
         if [ -d "$src/actions" ]; then
             for f in "$src/actions"/*.json; do
+                [ -e "$f" ] || continue
                 base=$(basename "$f" .json)
                 cp "$f" "$TRACES_DIR/train_merged/actions/${base}_attempt${attempt}.json"
             done
@@ -305,6 +320,7 @@ phase4_process() {
 
     # Condition A: WebRL pipeline
     log "Processing Condition A data..."
+    cd "$WEBRL_DIR"
     python scripts/process_data.py \
         --stage 1 \
         --rollout_path "$TRACES_DIR/train_merged" \
@@ -357,7 +373,7 @@ phase5_train() {
 
     # Condition A: Full WebRL (actor + critic + reference)
     log "Training Condition A (full WebRL)..."
-    cd scripts
+    cd "$WEBRL_DIR/scripts"
     torchrun --nproc_per_node 1 run.py \
         --config_path config/main \
         --config_name webrl \
@@ -372,7 +388,7 @@ phase5_train() {
 
     # Condition C: Critic-free (actor + reference only)
     log "Training Condition C (critic-free)..."
-    cd scripts
+    cd "$WEBRL_DIR/scripts"
     torchrun --nproc_per_node 1 train_no_critic.py \
         --config_path config/main \
         --config_name webrl \
@@ -408,6 +424,7 @@ phase6_eval() {
         src="$TRACES_DIR/eval_A_attempt_${attempt}"
         if [ -d "$src/actions" ]; then
             for f in "$src/actions"/*.json; do
+                [ -e "$f" ] || continue
                 base=$(basename "$f" .json)
                 cp "$f" "$TRACES_DIR/eval_A_merged/actions/${base}_attempt${attempt}.json"
             done
@@ -431,6 +448,7 @@ phase6_eval() {
         src="$TRACES_DIR/eval_C_attempt_${attempt}"
         if [ -d "$src/actions" ]; then
             for f in "$src/actions"/*.json; do
+                [ -e "$f" ] || continue
                 base=$(basename "$f" .json)
                 cp "$f" "$TRACES_DIR/eval_C_merged/actions/${base}_attempt${attempt}.json"
             done
@@ -440,6 +458,7 @@ phase6_eval() {
 
     # Compare
     log "Computing comparison..."
+    cd "$WEBRL_DIR"
     python scripts/evaluate.py compare \
         --a "$RESULTS_DIR/eval_A.json" \
         --c "$RESULTS_DIR/eval_C.json" | tee "$RESULTS_DIR/comparison.txt"

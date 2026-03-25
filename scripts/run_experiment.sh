@@ -487,9 +487,7 @@ time_phase "Phase 1: Verify Setup" phase1_verify
 time_phase "Phase 2: Sanity Check" phase2_sanity
 
 echo ""
-log ">>> GATE: Review sanity check results above."
-log ">>> Press Enter to continue, or Ctrl+C to abort."
-read -r
+log ">>> Sanity check complete. Continuing automatically..."
 
 time_phase "Phase 3: Rollouts" phase3_rollouts
 time_phase "Phase 4: Data Processing" phase4_process

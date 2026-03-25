@@ -209,16 +209,16 @@ phase1_verify() {
     }
     log "  ✓ vLLM server"
 
-    # Check containers (remote via tunnel URLs)
+    # Check containers (local PC via Tailscale)
     for name_url in "shopping:$SHOPPING" "reddit:$REDDIT" "gitlab:$GITLAB"; do
         name="${name_url%%:*}"
         url="${name_url#*:}"
         curl -s -o /dev/null "$url" || {
-            log "ERROR: $name not reachable at $url. Check tunnel."
+            log "ERROR: $name not reachable at $url. Check Tailscale + Docker on local PC."
             exit 1
         }
     done
-    log "  ✓ WebArena containers (via tunnel)"
+    log "  ✓ WebArena containers (via Tailscale)"
 
     # Check env vars
     [ -n "$SHOPPING" ] || { log "ERROR: source /tmp/webarena_env.sh first"; exit 1; }

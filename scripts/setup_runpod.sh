@@ -21,19 +21,19 @@ log() {
 WEBRL_DIR="/WebRL"
 
 # =============================================================
-# WebArena Site URLs (tunneled from local machine)
-# Docker containers run locally, exposed via cloudflare tunnels.
-# Update these URLs when tunnels change.
+# WebArena Site URLs (local machine via Tailscale)
+# Docker containers run on local PC, accessed over Tailscale mesh.
 # =============================================================
-SHOPPING_URL="https://ce59bedc06a6d4.lhr.life"
-SHOPPING_ADMIN_URL="https://d114f52e36df97.lhr.life"
-REDDIT_URL="https://541c91526e811f.lhr.life"
-GITLAB_URL="https://21cfc59e22e486.lhr.life"
+LOCAL_IP="100.92.2.51"
+SHOPPING_URL="http://${LOCAL_IP}:7770"
+SHOPPING_ADMIN_URL="http://${LOCAL_IP}:7780"
+REDDIT_URL="http://${LOCAL_IP}:9999"
+GITLAB_URL="http://${LOCAL_IP}:8023"
 
 # =============================================================
 # Step 1: Verify Remote WebArena Containers
 # =============================================================
-log "Step 1: Verifying remote WebArena containers (hosted locally, tunneled)..."
+log "Step 1: Verifying remote WebArena containers (local PC via Tailscale)..."
 
 for name_url in "shopping:${SHOPPING_URL}" "shopping_admin:${SHOPPING_ADMIN_URL}" "reddit:${REDDIT_URL}" "gitlab:${GITLAB_URL}"; do
     name="${name_url%%:*}"
@@ -205,7 +205,7 @@ echo "=========================================="
 echo "SETUP COMPLETE"
 echo "=========================================="
 echo ""
-echo "WebArena containers (tunneled from local machine):"
+echo "WebArena containers (local machine via Tailscale):"
 echo "  Shopping:       $SHOPPING_URL"
 echo "  Shopping Admin: $SHOPPING_ADMIN_URL"
 echo "  Reddit:         $REDDIT_URL"

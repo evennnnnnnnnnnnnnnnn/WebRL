@@ -61,7 +61,6 @@ run_rollout() {
         --provider openai \
         --mode completion \
         --model "$VLLM_MODEL" \
-        --planner_ip "localhost" \
         --stop_token "<|eot_id|>" \
         --max_obs_length 0 \
         --max_tokens 2048 \
@@ -111,7 +110,6 @@ run_rollout_finetuned() {
         --provider openai \
         --mode completion \
         --model "$model_path" \
-        --planner_ip "localhost" \
         --stop_token "<|eot_id|>" \
         --max_obs_length 0 \
         --max_tokens 2048 \

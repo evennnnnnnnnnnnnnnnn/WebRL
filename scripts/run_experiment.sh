@@ -67,7 +67,8 @@ run_rollout() {
         --viewport_width 1280 \
         --viewport_height 720 \
         --action_set_tag webrl_id \
-        --observation_type webrl
+        --observation_type webrl \
+        --eval_captioning_model_device cpu
     cd "$WEBRL_DIR"
 }
 
@@ -116,7 +117,8 @@ run_rollout_finetuned() {
         --viewport_width 1280 \
         --viewport_height 720 \
         --action_set_tag webrl_id \
-        --observation_type webrl
+        --observation_type webrl \
+        --eval_captioning_model_device cpu
     cd "$WEBRL_DIR"
 }
 

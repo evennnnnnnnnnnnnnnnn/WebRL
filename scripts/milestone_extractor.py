@@ -24,7 +24,7 @@ Given a task instruction for a web agent, break it down into a sequence of miles
 3. Cover the full task — completing all milestones means the task is done
 4. Are concrete and specific, not vague
 
-Return a JSON array of milestone strings. Each milestone should describe an observable state change on the page.
+Return ONLY a JSON array of milestone strings, no explanation or markdown. Each milestone should describe an observable state change on the page.
 
 Examples:
 
@@ -56,12 +56,25 @@ def _call_extract(client, model, prompt):
 
     text = response.content[0].text.strip()
 
-    # Parse JSON array from response
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
+    if not text:
+        raise ValueError("Empty response from API")
+
+    # Strip markdown code fences
+    if "```" in text:
+        parts = text.split("```")
+        for part in parts:
+            cleaned = part.strip()
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:].strip()
+            if cleaned.startswith("["):
+                text = cleaned
+                break
+
+    # Find JSON array in response
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1:
+        text = text[start:end + 1]
 
     milestones = json.loads(text)
 

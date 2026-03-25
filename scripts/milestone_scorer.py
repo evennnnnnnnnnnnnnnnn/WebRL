@@ -28,9 +28,9 @@ Milestones:
 Agent Trajectory:
 {trajectory_text}
 
-For each milestone, respond with a JSON array of booleans (true = achieved, false = not achieved), in the same order as the milestones.
+Respond with ONLY a JSON array of booleans (true = achieved, false = not achieved), in the same order as the milestones. No explanation, no markdown, just the JSON array.
 
-Example response: [true, true, false, false]
+Example: [true, true, false, false]
 
 Response:"""
 
@@ -69,11 +69,25 @@ def _call_score(client, model, prompt, num_milestones):
 
     text = response.content[0].text.strip()
 
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
+    if not text:
+        raise ValueError("Empty response from API")
+
+    # Strip markdown code fences
+    if "```" in text:
+        parts = text.split("```")
+        for part in parts:
+            cleaned = part.strip()
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:].strip()
+            if cleaned.startswith("["):
+                text = cleaned
+                break
+
+    # Find JSON array in response (model sometimes adds explanation before/after)
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1:
+        text = text[start:end + 1]
 
     achieved = json.loads(text)
 

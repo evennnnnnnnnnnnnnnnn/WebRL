@@ -19,46 +19,30 @@ log() {
 }
 
 WEBRL_DIR="/WebRL"
-HOSTNAME="localhost"
 
 # =============================================================
-# Step 1: WebArena Docker Containers
+# WebArena Site URLs (tunneled from local machine)
+# Docker containers run locally, exposed via cloudflare tunnels.
+# Update these URLs when tunnels change.
 # =============================================================
-log "Step 1: Starting WebArena Docker containers..."
+SHOPPING_URL="https://ce59bedc06a6d4.lhr.life"
+SHOPPING_ADMIN_URL="https://d114f52e36df97.lhr.life"
+REDDIT_URL="https://541c91526e811f.lhr.life"
+GITLAB_URL="https://21cfc59e22e486.lhr.life"
 
-# Shopping (Magento e-commerce)
-log "  Starting shopping (port 7770)..."
-docker run -d --name shopping -p 7770:80 am1n3e/webarena-verified-shopping 2>/dev/null || \
-    docker start shopping
+# =============================================================
+# Step 1: Verify Remote WebArena Containers
+# =============================================================
+log "Step 1: Verifying remote WebArena containers (hosted locally, tunneled)..."
 
-# Shopping Admin (CMS)
-log "  Starting shopping_admin (port 7780)..."
-docker run -d --name shopping_admin -p 7780:80 am1n3e/webarena-verified-shopping_admin 2>/dev/null || \
-    docker start shopping_admin
-
-# Reddit (Postmill forum)
-log "  Starting reddit (port 9999)..."
-docker run -d --name reddit -p 9999:80 am1n3e/webarena-verified-reddit 2>/dev/null || \
-    docker start reddit
-
-# GitLab
-log "  Starting gitlab (port 8023)..."
-docker run -d --name gitlab -p 8023:8023 am1n3e/webarena-verified-gitlab 2>/dev/null || \
-    docker start gitlab
-
-# Wait for containers to be ready
-log "  Waiting for containers to start (60s)..."
-sleep 60
-
-# Verify containers
-log "  Verifying containers..."
-for port_name in "7770:shopping" "7780:shopping_admin" "9999:reddit" "8023:gitlab"; do
-    port="${port_name%%:*}"
-    name="${port_name##*:}"
-    if curl -s -o /dev/null -w "%{http_code}" "http://${HOSTNAME}:${port}" | grep -qE "200|302|301"; then
-        log "    ✓ ${name} (port ${port}): OK"
+for name_url in "shopping:${SHOPPING_URL}" "shopping_admin:${SHOPPING_ADMIN_URL}" "reddit:${REDDIT_URL}" "gitlab:${GITLAB_URL}"; do
+    name="${name_url%%:*}"
+    url="${name_url#*:}"
+    if curl -s -o /dev/null -w "%{http_code}" "$url" | grep -qE "200|302|301"; then
+        log "    ✓ ${name}: OK ($url)"
     else
-        log "    ✗ ${name} (port ${port}): NOT READY (may need more time)"
+        log "    ✗ ${name}: NOT REACHABLE ($url)"
+        log "      Check that Docker container and tunnel are running on local machine."
     fi
 done
 
@@ -93,26 +77,26 @@ fi
 pip install -r requirements.txt --quiet 2>/dev/null
 playwright install chromium --with-deps 2>/dev/null
 
-# Set environment variables
+# Set environment variables (tunnel URLs to local Docker containers)
 export DATASET=webarena
-export SHOPPING="http://${HOSTNAME}:7770"
-export SHOPPING_ADMIN="http://${HOSTNAME}:7780/admin"
-export REDDIT="http://${HOSTNAME}:9999"
-export GITLAB="http://${HOSTNAME}:8023"
-export MAP="http://${HOSTNAME}:3000"
-export WIKIPEDIA="http://${HOSTNAME}:8888"
-export HOMEPAGE="http://${HOSTNAME}:4399"
+export SHOPPING="$SHOPPING_URL"
+export SHOPPING_ADMIN="${SHOPPING_ADMIN_URL}/admin"
+export REDDIT="$REDDIT_URL"
+export GITLAB="$GITLAB_URL"
+export MAP=""
+export WIKIPEDIA=""
+export HOMEPAGE=""
 
 # Save env vars for later use
 cat > /tmp/webarena_env.sh << EOF
 export DATASET=webarena
-export SHOPPING="http://${HOSTNAME}:7770"
-export SHOPPING_ADMIN="http://${HOSTNAME}:7780/admin"
-export REDDIT="http://${HOSTNAME}:9999"
-export GITLAB="http://${HOSTNAME}:8023"
-export MAP="http://${HOSTNAME}:3000"
-export WIKIPEDIA="http://${HOSTNAME}:8888"
-export HOMEPAGE="http://${HOSTNAME}:4399"
+export SHOPPING="$SHOPPING_URL"
+export SHOPPING_ADMIN="${SHOPPING_ADMIN_URL}/admin"
+export REDDIT="$REDDIT_URL"
+export GITLAB="$GITLAB_URL"
+export MAP=""
+export WIKIPEDIA=""
+export HOMEPAGE=""
 EOF
 
 # Generate task configs
@@ -200,10 +184,10 @@ print(f'vLLM inference test: {result[\"choices\"][0][\"text\"][:80]}...')
 print('✓ Model inference OK')
 " || log "  ✗ vLLM inference test failed"
 
-# Test WebArena container access
+# Test WebArena container access (via tunnel URLs)
 python -c "
 import requests
-for name, url in [('shopping', 'http://localhost:7770'), ('reddit', 'http://localhost:9999'), ('gitlab', 'http://localhost:8023')]:
+for name, url in [('shopping', '$SHOPPING_URL'), ('reddit', '$REDDIT_URL'), ('gitlab', '$GITLAB_URL')]:
     try:
         r = requests.get(url, timeout=10)
         print(f'✓ {name}: HTTP {r.status_code}')
@@ -221,11 +205,11 @@ echo "=========================================="
 echo "SETUP COMPLETE"
 echo "=========================================="
 echo ""
-echo "WebArena containers:"
-echo "  Shopping:       http://${HOSTNAME}:7770"
-echo "  Shopping Admin: http://${HOSTNAME}:7780"
-echo "  Reddit:         http://${HOSTNAME}:9999"
-echo "  GitLab:         http://${HOSTNAME}:8023"
+echo "WebArena containers (tunneled from local machine):"
+echo "  Shopping:       $SHOPPING_URL"
+echo "  Shopping Admin: $SHOPPING_ADMIN_URL"
+echo "  Reddit:         $REDDIT_URL"
+echo "  GitLab:         $GITLAB_URL"
 echo ""
 echo "vLLM server:      http://localhost:8000"
 echo "  PID: $(cat /tmp/vllm_pid.txt)"

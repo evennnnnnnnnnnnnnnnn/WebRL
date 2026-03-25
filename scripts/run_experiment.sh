@@ -123,12 +123,24 @@ run_rollout_finetuned() {
 }
 
 # Helper: refresh WebArena containers between attempts
+# NOTE: Containers run on the LOCAL machine, not on this GPU server.
+# To refresh, either:
+#   1. SSH back to local machine and run docker exec, or
+#   2. Skip refresh (acceptable for small-scale experiments)
+# Set LOCAL_SSH to enable remote refresh, e.g.: LOCAL_SSH="user@your-ip"
+LOCAL_SSH="${LOCAL_SSH:-}"
+
 refresh_containers() {
-    log "  Refreshing WebArena containers..."
-    for container in shopping shopping_admin reddit gitlab; do
-        docker exec "$container" env-ctrl init 2>/dev/null || true
-    done
-    sleep 10
+    if [ -n "$LOCAL_SSH" ]; then
+        log "  Refreshing WebArena containers via SSH ($LOCAL_SSH)..."
+        for container in shopping shopping_admin reddit gitlab; do
+            ssh "$LOCAL_SSH" "docker exec $container env-ctrl init" 2>/dev/null || true
+        done
+        sleep 10
+    else
+        log "  Skipping container refresh (containers are remote, LOCAL_SSH not set)"
+        log "  Set LOCAL_SSH=user@host to enable remote refresh"
+    fi
 }
 
 # Helper: collect results into JSON for evaluate.py
@@ -197,14 +209,16 @@ phase1_verify() {
     }
     log "  ✓ vLLM server"
 
-    # Check containers
-    for port in 7770 9999 8023; do
-        curl -s -o /dev/null "http://localhost:$port" || {
-            log "ERROR: Container on port $port not running."
+    # Check containers (remote via tunnel URLs)
+    for name_url in "shopping:$SHOPPING" "reddit:$REDDIT" "gitlab:$GITLAB"; do
+        name="${name_url%%:*}"
+        url="${name_url#*:}"
+        curl -s -o /dev/null "$url" || {
+            log "ERROR: $name not reachable at $url. Check tunnel."
             exit 1
         }
     done
-    log "  ✓ WebArena containers"
+    log "  ✓ WebArena containers (via tunnel)"
 
     # Check env vars
     [ -n "$SHOPPING" ] || { log "ERROR: source /tmp/webarena_env.sh first"; exit 1; }

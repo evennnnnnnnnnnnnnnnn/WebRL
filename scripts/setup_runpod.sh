@@ -3,8 +3,8 @@
 # RunPod A100 Full Setup Script
 #
 # Sets up everything needed for the A vs C experiment:
-#   1. Tailscale SOCKS5 proxy for reaching local WebArena containers
-#   2. Python dependencies (numpy, httpx[socks], dashscope, etc.)
+#   1. Conda environment with correct PyTorch + vLLM
+#   2. Tailscale SOCKS5 proxy verification
 #   3. VAB-WebArena-Lite (rollout/eval framework)
 #   4. vLLM model server (for agent inference)
 #   5. WebRL repo setup
@@ -57,44 +57,80 @@ for name_url in "shopping:${SHOPPING_URL}" "reddit:${REDDIT_URL}" "gitlab:${GITL
     name="${name_url%%:*}"
     url="${name_url#*:}"
     if curl -s --socks5 localhost:1055 -o /dev/null -w "%{http_code}" --max-time 15 "$url" 2>/dev/null | grep -qE "200|302|301"; then
-        log "  ✓ ${name}: OK"
+        log "  OK ${name}"
     else
-        log "  ✗ ${name}: NOT REACHABLE ($url)"
+        log "  FAIL ${name}: NOT REACHABLE ($url)"
     fi
 done
 
 log "Step 0 complete."
 
 # =============================================================
-# Step 1: Install Python dependencies (NO proxy — direct internet)
+# Step 1: Create conda env + install Python dependencies
 # =============================================================
-log "Step 1: Installing Python dependencies..."
+# IMPORTANT: Do NOT install into the RunPod system Python (3.11).
+# The system has pre-installed PyTorch/pydantic/fastapi pinned to
+# old versions that cause cascading conflicts with vLLM:
+#   - torch 2.0.1+cu117 missing torch.library.infer_schema (needs 2.5+)
+#   - pydantic missing IncEx (needs 2.x)
+#   - typing_extensions missing TypeIs (needs >=4.10)
+#   - duplicate libcudnn.so.8 + .so.9 causing AssertionError
+# A fresh conda env avoids ALL of these.
+# =============================================================
+log "Step 1: Setting up conda environment..."
 
 # Unset any proxy to avoid interfering with pip/git
 unset ALL_PROXY HTTP_PROXY HTTPS_PROXY
 
-# Check existing torch — don't overwrite it (avoids NCCL mismatch)
-TORCH_VERSION=$(python -c "import torch; print(torch.__version__)" 2>/dev/null || echo "none")
-log "  Existing PyTorch: $TORCH_VERSION"
-
-if [ "$TORCH_VERSION" = "none" ]; then
-    pip install torch --quiet
+# Create conda env if it doesn't exist
+if ! conda env list | grep -q "^webrl "; then
+    log "  Creating conda env 'webrl' with Python 3.10..."
+    conda create -n webrl python=3.10 -y
 fi
 
-# Pin numpy<2 (matplotlib/VAB compiled against numpy 1.x)
-# Upgrade typing_extensions (Anthropic SDK needs TypeIs from >=4.10)
-pip install "numpy<2" "typing_extensions>=4.10" --quiet
+# Activate conda env
+eval "$(conda shell.bash hook)"
+conda activate webrl
 
-# Install core deps (skip torch to keep pod's version)
+log "  Python: $(python --version) at $(which python)"
+
+# Install PyTorch with CUDA 12.4 wheels (compatible with CUDA 13.0 driver)
+# MUST install torch BEFORE WebRL's setup.py to prevent it pulling in
+# an ancient torch 2.0.1+cu117
+# PINNED: torch 2.6.0 + vLLM 0.7.3 is a tested working combination.
+#   - torch 2.10+ breaks vLLM 0.18 (FakeTensorMode AttributeError)
+#   - torch 2.0.x breaks vLLM (missing infer_schema)
+log "  Installing PyTorch 2.6.0 (CUDA 12.4)..."
+pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124 --quiet
+
+TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
+log "  PyTorch version: $TORCH_VERSION"
+
+# Install WebRL package (--no-deps to avoid it downgrading torch)
+log "  Installing WebRL..."
+cd "$WEBRL_DIR"
+pip install -e . --no-deps --quiet
+
+# Install vLLM (pinned to 0.7.3 — tested working with torch 2.6.0)
+log "  Installing vLLM 0.7.3..."
+pip install vllm==0.7.3 --quiet
+
+# Fix duplicate cuDNN: vLLM installs both cudnn 8 and 9, but only 9 is needed.
+# Two libcudnn.so.* files cause: AssertionError: Found 2 libcudnn.so.x
+CUDNN_DIR=$(python -c "import nvidia.cudnn; import os; print(os.path.dirname(nvidia.cudnn.__file__))" 2>/dev/null)/lib
+if [ -f "$CUDNN_DIR/libcudnn.so.8" ] && [ -f "$CUDNN_DIR/libcudnn.so.9" ]; then
+    log "  Removing duplicate libcudnn.so.8 (vLLM needs .so.9 only)..."
+    rm "$CUDNN_DIR/libcudnn.so.8"
+fi
+
+# Install remaining dependencies
+log "  Installing remaining dependencies..."
+pip install "numpy<2" "typing_extensions>=4.10" --quiet
 pip install transformers==4.44.2 accelerate==0.32.1 deepspeed==0.15.1 \
     hydra-core omegaconf datasets peft openai anthropic python-dotenv \
     wandb beautifulsoup4 sentencepiece tenacity termcolor tqdm \
-    httpx[socks] dashscope pysocks "requests[socks]" \
+    "httpx[socks]" dashscope pysocks "requests[socks]" \
     --quiet
-
-# Install vLLM (requires torch 2.4+ for LLaMA 3.1 support)
-# Use Runpod Pytorch 2.4.0+ template
-pip install vllm --quiet
 
 log "Step 1 complete."
 
@@ -188,6 +224,7 @@ export ALL_PROXY="$SOCKS5_PROXY"
 export HTTP_PROXY="$SOCKS5_PROXY"
 export HTTPS_PROXY="$SOCKS5_PROXY"
 export NO_PROXY="localhost,127.0.0.1"
+export no_proxy="localhost,127.0.0.1"
 
 export DATASET=webarena
 export SHOPPING="$SHOPPING_URL"
@@ -198,9 +235,14 @@ export MAP="$MAP_URL"
 export WIKIPEDIA="$WIKIPEDIA_URL"
 export HOMEPAGE="$HOMEPAGE_URL"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
+export OPENAI_API_BASE="http://localhost:8000/v1"
 
 # Save env vars for later use (sourced by run_experiment.sh)
 cat > /tmp/webarena_env.sh << 'ENVEOF'
+# Activate conda env
+eval "$(conda shell.bash hook)"
+conda activate webrl
+
 export DATASET=webarena
 export SHOPPING="http://100.92.2.51:7770"
 export SHOPPING_ADMIN="http://100.92.2.51:7780/admin"
@@ -210,11 +252,13 @@ export MAP="http://100.92.2.51:3000"
 export WIKIPEDIA="http://100.92.2.51:8888"
 export HOMEPAGE="http://100.92.2.51:4399"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
+export OPENAI_API_BASE="http://localhost:8000/v1"
 # Tailscale SOCKS5 proxy
 export ALL_PROXY="socks5://localhost:1055"
 export HTTP_PROXY="socks5://localhost:1055"
 export HTTPS_PROXY="socks5://localhost:1055"
 export NO_PROXY="localhost,127.0.0.1"
+export no_proxy="localhost,127.0.0.1"
 ENVEOF
 
 # Generate task configs (needs proxy to access sites for URL substitution)
@@ -259,12 +303,18 @@ echo $VLLM_PID > /tmp/vllm_pid.txt
 
 log "  Waiting for vLLM to load model (this takes a few minutes)..."
 for i in $(seq 1 60); do
-    if curl -s http://localhost:8000/health 2>/dev/null | grep -q "ok\|200"; then
-        log "  ✓ vLLM server ready (PID: $VLLM_PID)"
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null | grep -q "200"; then
+        log "  OK vLLM server ready (PID: $VLLM_PID)"
         break
     fi
+    # Check if process died
+    if ! kill -0 $VLLM_PID 2>/dev/null; then
+        log "  FAIL vLLM process died. Check /tmp/vllm_server.log:"
+        tail -20 /tmp/vllm_server.log
+        exit 1
+    fi
     if [ $i -eq 60 ]; then
-        log "  ✗ vLLM server not ready after 5 min. Check /tmp/vllm_server.log"
+        log "  FAIL vLLM server not ready after 5 min. Check /tmp/vllm_server.log"
         tail -20 /tmp/vllm_server.log
     fi
     sleep 5
@@ -278,8 +328,6 @@ log "Step 4 complete."
 log "Step 5: Finalizing WebRL setup..."
 
 cd "$WEBRL_DIR"
-
-pip install -e . --no-deps --quiet 2>/dev/null
 mkdir -p results checkpoints traces_output
 
 log "Step 5 complete."
@@ -300,8 +348,8 @@ resp = requests.post('http://localhost:8000/v1/completions', json={
 })
 result = resp.json()
 print(f'vLLM inference test: {result[\"choices\"][0][\"text\"][:80]}...')
-print('✓ Model inference OK')
-" || log "  ✗ vLLM inference test failed"
+print('OK Model inference')
+" || log "  FAIL vLLM inference test"
 
 # Test WebArena container access (via SOCKS5 proxy)
 python -c "
@@ -309,10 +357,13 @@ import requests
 for name, url in [('shopping', '$SHOPPING_URL'), ('reddit', '$REDDIT_URL'), ('gitlab', '$GITLAB_URL')]:
     try:
         r = requests.get(url, timeout=15)
-        print(f'✓ {name}: HTTP {r.status_code}')
+        print(f'OK {name}: HTTP {r.status_code}')
     except Exception as e:
-        print(f'✗ {name}: {e}')
-" || log "  ✗ Container access test failed"
+        print(f'FAIL {name}: {e}')
+" || log "  FAIL Container access test"
+
+# Verify Anthropic SDK
+python -c "import anthropic; print('OK Anthropic SDK')" || log "  FAIL Anthropic SDK not installed"
 
 log "Step 6 complete."
 
@@ -323,6 +374,10 @@ echo ""
 echo "=========================================="
 echo "SETUP COMPLETE"
 echo "=========================================="
+echo ""
+echo "Conda env:        webrl (Python 3.10)"
+echo "PyTorch:          $(python -c 'import torch; print(torch.__version__)')"
+echo "vLLM:             $(python -c 'import vllm; print(vllm.__version__)')"
 echo ""
 echo "WebArena containers (local machine via Tailscale SOCKS5):"
 echo "  Shopping:       $SHOPPING_URL"
@@ -336,6 +391,8 @@ echo "  Log: /tmp/vllm_server.log"
 echo "  GPU memory: 50%"
 echo ""
 echo "Environment:      source /tmp/webarena_env.sh"
+echo ""
+echo "IMPORTANT: Always run 'conda activate webrl' before any commands."
 echo ""
 echo "Next steps:"
 echo "  1. bash scripts/run_dryrun.sh"

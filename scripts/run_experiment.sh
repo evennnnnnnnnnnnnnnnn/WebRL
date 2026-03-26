@@ -13,6 +13,10 @@
 
 set -e
 
+# Activate conda env
+eval "$(conda shell.bash hook)"
+conda activate webrl
+
 WEBRL_DIR="/WebRL"
 VAB_DIR="/VisualAgentBench/VAB-WebArena-Lite"
 cd "$WEBRL_DIR"
@@ -102,12 +106,18 @@ run_rollout_finetuned() {
     # Wait for vLLM ready
     log "  Waiting for vLLM to load $model_path..."
     for i in $(seq 1 60); do
-        if curl -s http://localhost:8000/health 2>/dev/null | grep -q "ok\|200"; then
-            log "  ✓ vLLM ready"
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null | grep -q "200"; then
+            log "  OK vLLM ready"
             break
         fi
+        # Check if process died
+        if ! kill -0 $(cat /tmp/vllm_pid.txt) 2>/dev/null; then
+            log "  FAIL vLLM process died. Check /tmp/vllm_server.log:"
+            tail -20 /tmp/vllm_server.log
+            exit 1
+        fi
         if [ $i -eq 60 ]; then
-            log "  ✗ vLLM not ready after 5 min"
+            log "  FAIL vLLM not ready after 5 min"
             tail -10 /tmp/vllm_server.log
         fi
         sleep 5
@@ -198,11 +208,11 @@ phase1_verify() {
     log "Verifying setup..."
 
     # Check vLLM (localhost — no proxy)
-    curl -s http://localhost:8000/health > /dev/null || {
+    if ! curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null | grep -q "200"; then
         log "ERROR: vLLM not running. Start it first."
         exit 1
-    }
-    log "  ✓ vLLM server"
+    fi
+    log "  OK vLLM server"
 
     # Check containers (via Tailscale SOCKS5)
     for name_url in "shopping:$SHOPPING" "reddit:$REDDIT" "gitlab:$GITLAB"; do

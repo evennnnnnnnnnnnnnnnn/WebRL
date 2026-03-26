@@ -82,16 +82,18 @@ if [ "$TORCH_VERSION" = "none" ]; then
 fi
 
 # Pin numpy<2 (matplotlib/VAB compiled against numpy 1.x)
-pip install "numpy<2" --quiet
+# Upgrade typing_extensions (Anthropic SDK needs TypeIs from >=4.10)
+pip install "numpy<2" "typing_extensions>=4.10" --quiet
 
 # Install core deps (skip torch to keep pod's version)
 pip install transformers==4.44.2 accelerate==0.32.1 deepspeed==0.15.1 \
     hydra-core omegaconf datasets peft openai anthropic python-dotenv \
     wandb beautifulsoup4 sentencepiece tenacity termcolor tqdm \
-    httpx[socks] dashscope \
+    httpx[socks] dashscope pysocks "requests[socks]" \
     --quiet
 
-# Install vLLM
+# Install vLLM (requires torch 2.4+ for LLaMA 3.1 support)
+# Use Runpod Pytorch 2.4.0+ template
 pip install vllm --quiet
 
 log "Step 1 complete."

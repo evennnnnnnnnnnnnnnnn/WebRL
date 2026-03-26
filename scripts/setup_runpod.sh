@@ -133,8 +133,44 @@ if grep -q 'args.planner_ip' agent/agent.py 2>/dev/null; then
     log "  Patched agent.py: planner_ip defaults to empty string"
 fi
 
+# Patch openai_utils.py: fix unbound 'client' when using env var API key
+# The function creates a local 'client' only when api_key is passed, but falls
+# through to use it even when api_key is None, causing UnboundLocalError.
+if grep -q 'if api_key is not None:' llms/providers/openai_utils.py 2>/dev/null; then
+    python3 -c "
+import re
+with open('llms/providers/openai_utils.py', 'r') as f:
+    content = f.read()
+old = '''    if api_key is not None:
+        client = OpenAI(api_key=api_key, base_url=base_url)
+    response = client.completions.create('''
+new = '''    if api_key is not None:
+        _client = OpenAI(api_key=api_key, base_url=base_url)
+    else:
+        _client = client
+    response = _client.completions.create('''
+content = content.replace(old, new)
+with open('llms/providers/openai_utils.py', 'w') as f:
+    f.write(content)
+"
+    log "  Patched openai_utils.py: fixed unbound client variable"
+fi
+
+# Patch openai_utils.py: support OPENAI_API_BASE env var (vLLM uses this)
+if grep -q 'OPENAI_API_URL' llms/providers/openai_utils.py 2>/dev/null; then
+    sed -i 's/base_url = os.environ.get("OPENAI_API_URL")/base_url = os.environ.get("OPENAI_API_URL") or os.environ.get("OPENAI_API_BASE")/' llms/providers/openai_utils.py
+    log "  Patched openai_utils.py: added OPENAI_API_BASE fallback"
+fi
+
 # Install VAB dependencies
 pip install -r requirements.txt --quiet 2>/dev/null
+
+# Install missing deps not in requirements.txt
+pip install matplotlib text-generation aiolimiter dashscope google-auth \
+    evaluate scikit-image --quiet 2>/dev/null
+
+# Download NLTK data needed for evaluation
+python -c "import nltk; nltk.download('punkt_tab', quiet=True)" 2>/dev/null
 
 # Install Playwright (needs direct internet, no proxy)
 playwright install chromium --with-deps 2>/dev/null
